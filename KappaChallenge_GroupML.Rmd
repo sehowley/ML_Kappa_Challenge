@@ -1,0 +1,135 @@
+---
+title: "KappaChallenge_Group"
+author: "Brian Cervantes Alvarez"
+date: "`r Sys.Date()`"
+output: html_document
+warning: false
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## Setup
+```{r}
+library(tidyverse)
+library(caret)
+library(tidytext)
+library(SnowballC)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+library(scales)
+```
+
+## Feature Engineering
+```{r}
+set.seed(154)
+
+pinotDs <- read_rds("pinot.rds")
+
+#Function serves to filter out and identify most commonly used words in description
+wine_words <- function(df, j, stem = F){ 
+
+  data(stop_words)
+
+  words <- df %>%
+    unnest_tokens(word, description) %>%
+    anti_join(stop_words) %>%
+    filter(str_detect(string = word, pattern = "[a-z+]")) %>% # get rid weird non alphas 
+    filter(str_length(word) >= 3) %>% # get rid of strings shorter than 3 characters 
+    filter(!(word %in% c("wine","pinot"))) %>%
+    group_by(word) %>%
+    mutate(total=n()) %>%
+    ungroup()
+  
+  if(stem){
+    words <- words %>% 
+      mutate(word = wordStem(word))
+  }
+  
+  words <- words %>% 
+    count(id, word) %>% 
+    group_by(id) %>% 
+    mutate(exists = (n>0)) %>% 
+    ungroup %>% 
+    group_by(word) %>% 
+    mutate(total = sum(n)) %>% 
+    filter(total > j) %>% 
+    pivot_wider(id_cols = id,
+                names_from = word,
+                values_from = exists,
+                values_fill = list(exists=0)) %>% 
+    right_join(select(df,id,province)) %>% 
+    select(-id) %>% 
+    mutate(across(-province, ~replace_na(.x, F)))
+}
+
+wino <- wine_words(pinotDs, j = 1000) %>% 
+  filter(province %in% c("Oregon","California")) %>%
+  head() %>% 
+  arrange(province)
+
+wino
+
+
+wino2 <- wine_words(pinotDs, j = 1000) %>% 
+  filter(!(province %in% c("Oregon","California"))) %>%
+  head() %>% 
+  arrange(province)
+
+wino2
+```
+
+
+## Split the Training/Test Data
+
+```{r}
+ds <- wine_words(pinotDs, j = 100)
+
+wine_index <- createDataPartition(ds$province, p = 0.80, list = FALSE)
+train <- ds[wine_index,]
+test <- ds[-wine_index,]
+
+table(train$province)
+```
+
+
+## Model: Random Forest With Weights
+
+```{r}
+ctrl <- trainControl(method = "cv", number = 3)
+
+
+weight_train <- train %>% 
+  mutate(weights=case_when(
+    province=="Burgundy" ~ 3.32,
+    province=="California" ~ 1,
+    province=="Casablanca_Valley" ~ 30,
+    province=="Marlborough" ~ 17.22,
+    province=="New_York" ~ 30,
+    province=="Oregon" ~ 1.44))
+
+
+fit <- train(province ~ .,
+             data = train, 
+             method = "rf",
+             tuneLength = 10,
+             ntree = 50,
+             nodesize = 10,
+             verbose = TRUE,
+             weights = weight_train$weights,
+             trControl = ctrl,
+             metric = "Kappa")
+
+fit
+
+```
+
+## Confusion Matrix
+
+```{r}
+pred <- predict(fit, newdata=test)
+confusionMatrix(factor(pred),factor(test$province))
+```
