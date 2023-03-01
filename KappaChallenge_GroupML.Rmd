@@ -1,45 +1,36 @@
 ---
-title: "KappaChallenge_Group"
-author: "Brian Cervantes Alvarez"
-date: "`r Sys.Date()`"
+title: "Modeling Assignment 1"
 output: html_document
-warning: false
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-
 ## Setup
-```{r}
+
+```{r message=FALSE, warning=FALSE}
+# add your libraries
 library(tidyverse)
 library(caret)
-library(tidytext)
-library(SnowballC)
 library(rpart)
-library(rpart.plot)
-library(randomForest)
-library(scales)
+wine = read_rds("pinot.rds") 
 ```
 
+
 ## Feature Engineering
+
 ```{r}
-set.seed(154)
+# create some cool features. Make sure you add comments so I know what you are trying to accomplish!
 
-pinotDs <- read_rds("pinot.rds")
-
-#Function serves to filter out and identify most commonly used words in description
-wine_words <- function(df, j, stem = F){ 
-
+wine_words <- function(df, j, stem = T){ 
   data(stop_words)
-
   words <- df %>%
     unnest_tokens(word, description) %>%
     anti_join(stop_words) %>%
     filter(str_detect(string = word, pattern = "[a-z+]")) %>% # get rid weird non alphas 
     filter(str_length(word) >= 3) %>% # get rid of strings shorter than 3 characters 
-    filter(!(word %in% c("wine","pinot"))) %>%
+    filter(!(word %in% c("wine","pinot", "vineyard"))) %>%
     group_by(word) %>%
     mutate(total=n()) %>%
     ungroup()
@@ -66,70 +57,36 @@ wine_words <- function(df, j, stem = F){
     mutate(across(-province, ~replace_na(.x, F)))
 }
 
-wino <- wine_words(pinotDs, j = 1000) %>% 
-  filter(province %in% c("Oregon","California")) %>%
-  head() %>% 
-  arrange(province)
+wino <- wine_words(wine, j = 190, stem = T)
 
-wino
-
-
-wino2 <- wine_words(pinotDs, j = 1000) %>% 
-  filter(!(province %in% c("Oregon","California"))) %>%
-  head() %>% 
-  arrange(province)
-
-wino2
 ```
 
 
-## Split the Training/Test Data
+## Specification
 
 ```{r}
-ds <- wine_words(pinotDs, j = 100)
+# specify the model to be used (i.e. KNN or Naive Bayes) and the tuning parameters used
+set.seed(504) 
 
-wine_index <- createDataPartition(ds$province, p = 0.80, list = FALSE)
-train <- ds[wine_index,]
-test <- ds[-wine_index,]
-
-table(train$province)
-```
-
-
-## Model: Random Forest With Weights
-
-```{r}
 ctrl <- trainControl(method = "cv", number = 3)
 
 
-weight_train <- train %>% 
-  mutate(weights=case_when(
-    province=="Burgundy" ~ 3.32,
-    province=="California" ~ 1,
-    province=="Casablanca_Valley" ~ 30,
-    province=="Marlborough" ~ 17.22,
-    province=="New_York" ~ 30,
-    province=="Oregon" ~ 1.44))
-
+wine_index <- createDataPartition(wino$province, p = 0.80, list = FALSE)
+train <- wino[ wine_index, ]
+test <- wino[-wine_index, ]
 
 fit <- train(province ~ .,
              data = train, 
              method = "rf",
-             tuneLength = 10,
-             ntree = 50,
+             ntree = 100,
+             tuneLength = 15,
              nodesize = 10,
              verbose = TRUE,
-             weights = weight_train$weights,
              trControl = ctrl,
              metric = "Kappa")
-
-fit
-
 ```
 
-## Confusion Matrix
 
 ```{r}
-pred <- predict(fit, newdata=test)
-confusionMatrix(factor(pred),factor(test$province))
+confusionMatrix(predict(fit, test),factor(test$province))
 ```
